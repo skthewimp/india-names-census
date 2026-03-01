@@ -1,0 +1,263 @@
+---
+title: "Hindi Maps"
+output: html_notebook
+---
+
+```{r}
+indlan <- read_csv('india language.csv')
+names(indlan) <- names(lan1)
+```
+
+```{r}
+indlan$Major <- grepl('\\d+', indlan$language) & !grepl('Others', indlan$language)
+```
+
+```{r}
+indlan %>% filter(Area=="INDIA") %>% filter(Major) %>% arrange(-Total_P) %>% mutate(Share=Total_P/sum(Total_P)) %>% select(language, Total_P, Share) 
+```
+
+```{r}
+indlan %>% filter(Area=="INDIA") %>% filter(!Major) %>% arrange(-Total_P) %>% mutate(Share=Total_P/sum(Total_P)) %>% select(language, Total_P, Share) 
+```
+
+```{r}
+indlan %>% 
+  filter(Area=="INDIA" & !Major & substr(Mother_tongue, 1,3)=='006') %>% 
+  arrange(-Total_P) %>% 
+  mutate(Share=Total_P/sum(Total_P)) %>% 
+  select(language, Total_P, Share) %>% 
+  filter(!grepl('Others', language) ) %>% 
+  left_join(
+    indlan %>% 
+      filter(!Major & substr(Mother_tongue,1,3)=='006' & Area != "INDIA") %>% 
+      group_by(language) %>% 
+      mutate(Share=Total_P/sum(Total_P), Total=sum(Total_P)) %>% 
+      ungroup() %>% 
+      arrange(language, -Share) %>% 
+      distinct(language, .keep_all=T) %>% 
+      arrange(-Total) %>% 
+      filter(!grepl('Others', language)) %>% 
+      select(language, MajorState=Area, PercSpeakers=Share) ,
+    by='language'
+  ) %>%
+  arrange(-Total_P) %>% 
+  group_by(language)
+```
+
+```{r}
+# Percentage of each dialect by district
+distShare <- langMinor %>% filter(substr(Mother_tongue, 1,3)=='006' & District_code != '000' & SubDistrict=='00000') %>% ungroup() %>% mutate(District_code=as.integer(District_code)) %>% group_by(State_code, District_code) %>% mutate(Share=Total_P/sum(Total_P)) %>% arrange(District_code, -Share) %>% select(State_code, District_code, Area, language, Share)
+
+# Top Dialects by state 
+stateTop <- indlan %>% filter(!Major & substr(Mother_tongue,1,3)=='006' & Area != "INDIA") %>% group_by(Area) %>% filter(!grepl('Others', language)) %>% mutate(DialectShare=Total_P/sum(Total_P), DialectRank=rank(-Total_P), TotalPop=sum(Total_P)) %>% select(State_code, Area, language, DialectRank, DialectShare, TotalPop) %>% arrange(-TotalPop, DialectRank)
+```
+
+```{r}
+head(distShare)
+head(stateTop)
+```
+
+```{r}
+stateTop <- stateTop %>% filter(language != "Hindi" & DialectRank <= 5 & DialectShare > 0.05)
+i <- 1
+for(i in 1:nrow(stateTop)) {
+  stdf <- tibble(District_code=indist[indist$ST_NM==stateTop$Area[i],]$censuscode) %>%
+    mutate(index=1:n(), language=stateTop$language[i], State_code=stateTop$State_code[i]) %>% 
+    left_join(distShare, by=c('State_code', 'language', 'District_code')) %>%
+    replace(., is.na(.), 0) %>%
+    arrange(index) %>%
+    mutate(Colour=gray(1-Share))
+  plot(indist[indist$ST_NM==stateTop$Area[i],], col=stdf$Colour)
+  title(paste(stateTop$language[i], ' in ', stateTop$Area[i],sep=''))
+}
+```
+
+```{r}
+indlan %>% filter(!Major & substr(Mother_tongue,1,3)=='006' & Area != "INDIA") %>% group_by(language) %>% mutate(Share=Total_P/sum(Total_P), Total=sum(Total_P)) %>% ungroup() %>% arrange(language, -Share) %>% distinct(language, .keep_all=T) %>% arrange(-Total) %>% filter(!grepl('Others', language)) %>% select(language, MajorState=Area, PercSpeakers=Share) 
+``` 
+```{r}
+statetop3 <- indlan %>% filter(!Major & substr(Mother_tongue,1,3)=='006' & Area != "INDIA") %>% group_by(Area) %>% filter(!grepl('Others', language)) %>% mutate(DialectShare=Total_P/sum(Total_P), DialectRank=rank(-Total_P)) %>% group_by(Area) %>% mutate(StateTotal=sum(Total_P))  %>% ungroup() %>% group_by(State_code, Area) %>% top_n(3, Total_P) %>% arrange(Area, DialectRank) %>% select(Area, language, Total_P, DialectShare, DialectRank, StateTotal) %>% mutate(langSig=paste(language,', ', round(DialectShare*100), '%',sep='') ) %>%  select(State_code, Area,StateTotal,DialectRank,langSig) %>% spread(DialectRank, langSig) %>% arrange(-StateTotal)
+```
+
+```{r}
+statetop3
+```
+
+```{r}
+topdist <- langMinor %>% filter(substr(Mother_tongue, 1,3)=='006' & District_code != '000' & SubDistrict=='00000') %>% filter(!grepl('Others', language)) %>% group_by(State_code, District_code) %>% mutate(Share=Total_P/sum(Total_P)) %>% arrange(District_code, -Share) %>% distinct(District_code, .keep_all=T)
+```
+
+```{r}
+head(topdist)
+```
+
+```{r}
+require(maptools)
+indist <- readShapeSpatial('maps/2011_Dist.shp')
+```
+
+```{r}
+names(indist)
+```
+
+```{r}
+indist$ST_NM <- toupper(indist$ST_NM)
+unique(indist$ST_NM)
+```
+```{r}
+indist@data$id <- rownames(indist@data)
+indist2 <- fortify(indist, region='id')
+indist2 <- indist2 %>% left_join(indist@data, by='id')
+```
+```{r}
+head(indist2)
+```
+
+```{r}
+#pdf('~/Documents/work/Mint/Top dialects by district.pdf', 16,9)
+for(i in 1:6)
+{
+  stnm <- statetop3$Area[i]
+  print(stnm)
+  dt <- indist2 %>% 
+    left_join(
+      topdist %>% 
+        ungroup() %>%
+        mutate(censuscode=as.numeric(District_code)) %>% 
+        select(censuscode, language),
+      by='censuscode'
+    ) %>%
+    filter(ST_NM==stnm)
+  if(length(unique(dt$language))>1)
+  {
+    p <- dt %>%
+      ggplot(aes(x=long, y=lat, group=group, fill=language)) +
+      geom_polygon() +
+      geom_path(lty=3) + 
+      coord_equal() + 
+      scale_fill_brewer(palette='Set3') + 
+      theme_bw() + 
+      scale_x_continuous('', breaks=c()) +
+      scale_y_continuous('', breaks=c()) +
+      ggtitle(stnm)
+    print(p)
+  }
+}
+#dev.off()
+
+```
+
+```{r}
+indist2 %>% 
+    left_join(
+      topdist %>% 
+        ungroup() %>%
+        mutate(censuscode=as.numeric(District_code)) %>% 
+        select(censuscode, language),
+      by='censuscode'
+    ) %>%
+    filter(ST_NM %in% statetop3$Area[1:6]) %>%
+    ggplot(aes(x=long, y=lat, group=group, fill=language)) +
+    geom_polygon() +
+    geom_path(lty=3) + 
+    coord_equal() + 
+    scale_fill_brewer(palette='Set3') + 
+    theme_bw() + 
+    scale_x_continuous('', breaks=c()) +
+    scale_y_continuous('', breaks=c()) +
+    facet_wrap(~ST_NM, scales='free')
+```
+
+```{r}
+topHindiStates <- indlan %>% 
+  filter(Area!='INDIA' & Major & grepl("HINDI", language)) %>%
+  arrange(-Total_P)
+```
+
+```{r}
+head(topHindiStates)
+```
+
+```{r}
+dt <- indist2 %>% 
+  distinct(DISTRICT, ST_NM, censuscode) %>%
+    left_join(
+      langMinor %>% 
+        filter(substr(Mother_tongue, 1, 3)=='006') %>%  # hindi dialects
+        ungroup() %>%
+        mutate(censuscode=as.numeric(District_code)) %>% 
+        select(censuscode, language, Total_P),
+      by='censuscode'
+    ) %>% 
+  group_by(ST_NM, language) %>%
+  filter(!grepl('Others', language)) %>%
+  summarise(TotalSpeakers=sum(Total_P)) %>%
+  group_by(ST_NM) %>% 
+  top_n(n = 4, wt = TotalSpeakers) %>% 
+  arrange(ST_NM,-TotalSpeakers)
+```
+
+```{r}
+dt
+```
+
+```{r}
+head(indist2)
+```
+
+```{r}
+#for(i in 1:10)
+i <- 1
+{
+  stnm <- topHindiStates$Area[i]
+  print(stnm)
+  p <- langMinor %>%
+    mutate(censuscode=as.numeric(District_code)) %>% 
+    filter(censuscode %in% (
+      indist2 %>% 
+        filter(ST_NM==stnm) %>% 
+        pull(censuscode)
+    )) %>%
+    group_by(censuscode) %>%
+    mutate(Share=Total_P/sum(Total_P), ST_NM=stnm) %>%
+    inner_join(dt %>% select(ST_NM, language)) %>%
+    select(censuscode, language, Share) %>% 
+    inner_join(indist2, by='censuscode') %>%
+    ggplot(aes(x=long, y=lat, group=group, fill=Share)) + 
+    geom_polygon() + 
+    geom_path(lty=3) +
+    coord_equal() + 
+    facet_wrap(~langauge) +
+    scale_fill_gradient(low='white', high='red') + 
+    ggtitle(stnm)  + 
+    theme_bw() + 
+      scale_x_continuous('', breaks=c()) +
+      scale_y_continuous('', breaks=c()) 
+  print(p)
+
+}
+```
+
+```{r}
+head(langMinor)
+```
+
+```{r}
+hyperlocal <- langMinor %>% filter(SubDistrict=='00000' & District_code != '000' & substr(Mother_tongue, 1, 3)=='006' & !grepl('Others', language)) %>% arrange(language, -Total_P) %>% group_by(language) %>% mutate(DistShare=Total_P/sum(Total_P), DistNum=rank(-Total_P), DistCumShare=cumsum(DistShare), TotalSpeakers=sum(Total_P)) %>% select(language, Area, DistShare, DistNum, DistCumShare, TotalSpeakers) %>% filter((DistCumShare-DistShare) < 0.9) %>%  mutate(Areas=paste(Area, collapse=', ')) %>% filter(DistCumShare>0.9 & (DistCumShare-DistShare)<0.9) %>% arrange(DistNum, -DistCumShare) %>% filter(TotalSpeakers>=1000000) %>% select(language, TotalSpeakers, DistNum, DistCumShare, Areas) %>% filter(DistNum <= 5) %>% pull(language)
+
+indlan %>% 
+  filter(language %in% hyperlocal) %>% 
+  filter(Area!='INDIA') %>%
+  arrange(language, -Total_P) %>% 
+  group_by(language) %>% 
+  mutate(StateNum=rank(-Total_P)) %>%
+  mutate(Share=Total_P/sum(Total_P)) %>%
+  filter(StateNum<=2) %>% 
+  select(language, Area, Share) %>%
+  filter(Share > 0.1)
+```
+
+```{r}
+langMinor %>% filter(SubDistrict!='00000'& substr(Mother_tongue, 1, 3)=='006' & !grepl('Others', language)) %>% arrange(language, -Total_P) %>% group_by(language) %>% mutate(DistShare=Total_P/sum(Total_P), DistNum=rank(-Total_P), DistCumShare=cumsum(DistShare), TotalSpeakers=sum(Total_P)) %>% select(language, Area, DistShare, DistNum, DistCumShare, TotalSpeakers) %>% filter((DistCumShare-DistShare) < 0.9) %>%  mutate(Areas=paste(Area, collapse=', ')) %>% filter(DistCumShare>0.9 & (DistCumShare-DistShare)<0.9) %>% arrange(DistNum, -DistCumShare) %>% filter(TotalSpeakers>=1000000) %>% select(language, Areas, DistNum, DistCumShare)
+```
+

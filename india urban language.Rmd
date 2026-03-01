@@ -1,0 +1,223 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+require(tidyverse)
+require(RCurl)
+require(readxl)
+
+tmp <- tempfile()
+for(st in 1:35)
+{
+  url <- sprintf('http://www.censusindia.gov.in/2011census/C-16/DDW-C16-STMT-MDDS-%02d00.XLSX',st)
+  download.file(url, tmp, method='curl')
+  lan1 <- read_excel(tmp, 1)
+  lan1 <- lan1[-c(1:5),]
+  names(lan1) <- c('Table', 'State_code', 'District_code', 'SubDistrict', 'Area', 'Mother_tongue', 'language', 'Total_P', 'Total_M', 'Total_F', 'Rural_P', 'Rural_M', 'Rural_F', 'Urban_P', 'Urban_M', 'Urban_F')
+  if(st==1) lan2 <- lan1 else
+    lan2 <- bind_rows(lan2, lan1)
+  print(paste(st, Sys.time(), nrow(lan1), nrow(lan2)))
+}
+```
+```{r}
+load('india languages major and minor.RData')
+load('india languages.RData')
+```
+
+```{r}
+
+lan2 <- as.data.frame(lan2)
+for(i in 8:ncol(lan2)) lan2[,i] <- as.numeric(lan2[,i])
+lan2 <- as.tibble(lan2)
+```
+
+```{r}
+lan2 %>% count(SubDistrict)
+```
+
+```{r}
+lan2 <- lan2 %>% mutate(Major=(grepl('\\d+',language) & !grepl('Others', language)))
+
+```
+
+```{r}
+head(lan2) %>% group_by(Area)
+```
+```{r}
+langMajor <- lan2 %>%  filter(Major)
+langMinor <- lan2 %>% filter(!Major)
+```
+
+```{r}
+langMajor %>% filter(SubDistrict != '00000') %>% group_by(Area) %>% summarise(Total=sum(Total_P)) %>% arrange(-Total) %>% group_by(Area)
+```
+
+```{r}
+areas <- langMajor %>% group_by(State_code, District_code, SubDistrict, Area) %>% summarise(TotalUrban=sum(Urban_P), TotalRural=sum(Rural_P)) %>% ungroup()
+```
+
+```{r}
+head(areas)
+```
+
+```{r}
+areas %>% filter(TotalRural==0) %>% arrange(-TotalUrban) %>% distinct(TotalUrban, .keep_all=T) %>% group_by(TotalUrban)
+```
+
+```{r}
+areas <- areas %>% left_join(areas %>% filter(SubDistrict=='00000') %>% select(District_code, TopArea=Area), by='District_code') %>% mutate(Area=ifelse(SubDistrict=='99999', TopArea, Area)) %>% select(-TopArea) %>% distinct()  %>% ungroup()
+```
+
+```{r}
+cities <- areas %>% filter(TotalUrban>1e5 & TotalUrban/(TotalUrban+TotalRural) > 0.9) %>% arrange(-(TotalUrban)) %>% distinct(Area, .keep_all=T)
+```
+
+```{r}
+cities <- cities %>% 
+  left_join(cities %>% filter(District_code=='000') %>% select(State_code) %>% mutate(fullState=T)) %>% 
+  filter(is.na(fullState) | District_code=='000') %>% 
+  left_join(cities %>% filter(District_code!='000' & SubDistrict=='00000') %>% select(District_code) %>% mutate(fullDistrict=T)) %>% 
+  filter(is.na(fullDistrict) | SubDistrict=='00000')
+  
+```
+
+```{r} 
+cities %>% arrange(State_code) %>% group_by(Area) %>% arrange(-TotalUrban)
+```
+
+```{r}
+cities <- cities %>% mutate(Signature=paste(State_code, District_code, SubDistrict, sep='_'))
+langMajor <- langMajor %>% mutate(Signature=paste(State_code, District_code, SubDistrict, sep='_'))
+langMinor <- langMinor %>% mutate(Signature=paste(State_code, District_code, SubDistrict, sep='_'))
+
+```
+
+```{r}
+cityLangMajor <- cities %>% 
+  select(Area, Signature) %>% 
+  left_join(langMajor %>% select(Signature, language, Urban_P), by='Signature') %>%
+  group_by(Area, language) %>% 
+  summarise(Total=sum(Urban_P)) %>% 
+  arrange(Area, -Total) %>%
+  mutate(language=gsub('[^A-Za-z]', '', language))
+
+
+```
+
+```{r}
+head(cityLangMajor)
+```
+
+```{r}
+cityLangMinor <- cities %>% 
+  select(Area, Signature) %>% 
+  left_join(langMinor %>% select(Signature, language, Urban_P), by='Signature') %>%
+  group_by(Area, language) %>% 
+  summarise(Total=sum(Urban_P)) %>% 
+  arrange(Area, -Total) %>%
+  mutate(language=gsub('[^A-Za-z]', '', language))
+
+
+```
+
+```{r}
+head(cityLangMinor)
+```
+
+```{r}
+cityDiversity <- cityLangMajor %>% 
+  group_by(Area) %>% 
+  mutate(Share=Total/sum(Total)) %>% 
+  summarise(MajorHHI=sum(Share*Share), NumMajor=1/MajorHHI) %>% 
+  left_join(
+    cityLangMinor %>% 
+      group_by(Area) %>% 
+      mutate(Share=Total/sum(Total)) %>% 
+      summarise(MinorHHI=sum(Share*Share), NumMinor=1/MinorHHI),
+    by='Area'
+  ) %>% 
+  left_join(cities %>% select(Area, Population=TotalUrban)) %>%
+  arrange(-NumMajor, -NumMinor) 
+  
+```
+
+```{r}
+cityDiversity
+```
+
+```{r}
+cityLangMajorList <- cityLangMajor %>% 
+  group_by(Area) %>% 
+  arrange(-Total) %>%
+  mutate(Share=Total/sum(Total), cumulShare=cumsum(Share)) %>% 
+  filter(cumulShare-Share <= 0.9) %>%
+  mutate(Sign=paste(language, ': ', round(Share*100), '%', sep='')) %>%
+  summarise(TopLang=paste(Sign, collapse=', '), Population=sum(Total)) %>%
+  arrange(-Population)
+```
+
+```{r}
+cityLangMinorList <- cityLangMinor %>% 
+  group_by(Area) %>% 
+  filter(!grepl('Others', language)) %>%
+  arrange(-Total) %>%
+  mutate(Share=Total/sum(Total), cumulShare=cumsum(Share)) %>% 
+  filter(cumulShare-Share <= 0.8) %>%
+  mutate(Sign=paste(language, ': ', round(Share*100), '%', sep='')) %>%
+  summarise(TopLang=paste(Sign, collapse=', '), Population=sum(Total)) %>%
+  arrange(-Population)
+```
+
+```{r}
+cityLangMajorList 
+```
+
+```{r}
+cityLangMinorList
+```
+
+```{r}
+cityDiversity %>% 
+  select(Area, NumMajor, Population) %>%
+  left_join(cityLangMajorList %>% select(Area, TopLang), by='Area') %>%
+  arrange(-NumMajor) %>%
+  write_delim(pipe('pbcopy'), delim='\t')
+  
+```
+
+```{r}
+cityDiversity %>% 
+  select(Area, NumMajor, NumMinor, Population) %>%
+  left_join(cityLangMinorList %>% select(Area, TopDialects=TopLang), by='Area') %>%
+  left_join(cityLangMajorList %>% select(Area, TopLang), by='Area') %>%
+  arrange(-NumMinor) %>%
+  write_delim(pipe('pbcopy'), delim='\t')
+```
+
+```{r}
+cityDiversity %>% 
+  select(Area, NumMajor, NumMinor, Population) %>%
+  left_join(cityLangMinorList %>% select(Area, TopDialects=TopLang), by='Area') %>%
+  left_join(cityLangMajorList %>% select(Area, TopLang), by='Area') %>%
+  arrange(-Population) %>%
+  write_delim(pipe('pbcopy'), delim='\t')
+```
+
+```{r}
+cityDiversity %>% 
+  select(Area, NumMajor, NumMinor, Population) %>%
+  left_join(cityLangMinorList %>% select(Area, TopDialects=TopLang), by='Area') %>%
+  left_join(cityLangMajorList %>% select(Area, TopLang), by='Area') %>%
+  arrange(-Population) %>%
+  ggplot(aes(x=Population, y=NumMajor, label=Area)) + geom_point() + geom_text()  + geom_smooth(method='lm')
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file).

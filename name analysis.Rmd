@@ -1,0 +1,173 @@
+---
+title: "Name Analysis"
+output: html_notebook
+---
+
+```{r, include=F}
+require(tidyverse)
+setwd('~/Documents/work/data work/')
+```
+
+```{r include=F}
+load('bangaloreVoterList.RData')
+```
+
+
+
+## Most Common Names
+```{r}
+blr%>%
+  count(Name, sort=T) %>%
+  mutate(Words=str_count(Name, "[ws]+"))
+```
+
+
+## Most Common house numbers
+```{r}
+blr %>% 
+  count(House, sort=T)
+```
+
+## get first names only
+
+```{r}
+load('bangaloreFirstNames.RData')
+```
+
+```{r}
+p5
+```
+
+
+
+
+## Import US data
+```{r}
+usstates <- list.files('~/Downloads/namesbystate/', '.TXT', full.names = T)
+
+usNames <- tibble()
+
+for(uss in usstates) 
+  usNames <- usNames %>%
+  bind_rows(
+    read_csv(uss, col_names = c("State", "Sex", "Year", "Name", "Num"), col_types = 
+               cols(
+                 State = col_character(),
+                 Sex = col_character(),
+                 Year = col_double(),
+                 Name = col_character(),
+                 Num = col_double()
+               )
+    )
+  )
+
+
+```
+
+
+## Diversity of names in the US by state
+
+```{r}
+usNames %>%
+  group_by(State, Sex, Year) %>%
+  mutate(Prop=Num/sum(Num)) %>%
+  summarise(HH=sum(Prop*Prop), Num=sum(Num)) %>%
+  filter(Num >= 1000) %>%
+  mutate(Effective=1/HH) %>%
+  ggplot(aes(x=Year, y=Effective, col=Sex)) + geom_point() + geom_line() + ggtitle("Effective number of first names") + theme_minimal() + facet_wrap(~State)
+```
+
+## Diversity of names in all of the US
+
+```{r}
+usNames %>%
+  group_by(Sex, Year, Name) %>%
+  summarise(Num=sum(Num)) %>%
+  group_by(Sex, Year) %>%
+  mutate(Prop=Num/sum(Num)) %>%
+  summarise(HH=sum(Prop*Prop), Num=sum(Num)) %>%
+  filter(Num >= 1000) %>%
+  mutate(Effective=1/HH) %>%
+  filter(Year <= 1995) %>%
+  ggplot(aes(x=Year, y=Effective, col=Sex)) + geom_point() + geom_line() + ggtitle("Effective number of first names by year of birth: US") + theme_minimal()+ ylim(c(0,300))
+```
+
+## Herfindahl Index of first names by age in Bangalore
+```{r}
+p5 %>%
+  filter(Sex != 'blank') %>%
+  count(word, Age, Sex) %>%
+  filter(n >= 5) %>%
+  group_by(Age, Sex) %>%
+  mutate(Prop=n/sum(n)) %>%
+  summarise(HH=sum(Prop*Prop), Num=sum(n)) %>%
+  filter(Num >= 1000) %>%
+  mutate(Effective=1/HH) %>%
+  mutate(Year=2017-Age) %>%
+  filter(Year <= 1995) %>%
+  ggplot(aes(x=Year, y=Effective, col=Sex)) + geom_point() + geom_line() + ggtitle("Effective number of first names by year of birth: Bangalore") + theme_minimal() + ylim(c(0,300))
+
+```
+
+
+## Get the data together and plot to compare
+
+```{r}
+p5 %>%
+  filter(Sex != 'blank') %>%
+  count(word, Age, Sex) %>%
+  filter(n >= 5) %>%
+  group_by(Age, Sex) %>%
+  mutate(Prop=n/sum(n)) %>%
+  summarise(HH=sum(Prop*Prop), Num=sum(n)) %>%
+  filter(Num >= 1000) %>%
+  mutate(Effective=1/HH) %>%
+  mutate(Year=2017-Age) ->
+  blrAge
+
+usNames %>%
+  group_by(Sex, Year, Name) %>%
+  summarise(Num=sum(Num)) %>%
+  group_by(Sex, Year) %>%
+  mutate(Prop=Num/sum(Num)) %>%
+  summarise(HH=sum(Prop*Prop), Num=sum(Num)) %>%
+  filter(Num >= 1000) %>%
+  mutate(Effective=1/HH) ->
+  usAge
+```
+
+```{r}
+blrAge %>%
+  ungroup() %>%
+  select(Year, Sex, Effective) %>%
+  mutate(Location='Bangalore') %>%
+  bind_rows(
+    usAge %>%
+      select(Year, Sex, Effective) %>%
+      mutate(Location='US')
+  ) %>%
+  filter(Year >= 1940 & Year <= 1990) %>%
+  ggplot(aes(x=Year, y=Effective, col=Location)) + geom_point() + geom_line() + facet_wrap(~Sex) + ggtitle("Effective Number of First Names by year of birth", subtitle="Comparing the US and Bangalore") + theme_bw() + scale_colour_brewer(palette="Set1") + theme(legend.title = element_blank(), legend.position = 'bottom', title=element_text(face='bold', size=16), text=element_text(face='bold'), strip.text=element_text(hjust=0, face='bold')) + ylab("Effective number of first names")
+```
+
+Why don't we compare bangalore and Texas instead ?
+
+```{r}
+blrAge %>%
+  ungroup() %>%
+  select(Year, Sex, Effective) %>%
+  mutate(Location='Bangalore') %>%
+  bind_rows(
+    usNames %>%
+      filter(State=='TX') %>%
+      group_by(Sex, Year) %>%
+      mutate(Prop=Num/sum(Num)) %>%
+      summarise(Effective=1/sum(Prop*Prop)) %>%
+      mutate(Location='Texas')
+  ) %>%
+  filter(Year >= 1940 & Year <= 1990) %>%
+  ggplot(aes(x=Year, y=Effective, col=Location)) + geom_point() + geom_line() + facet_wrap(~Sex) + ggtitle("Effective Number of First Names by year of birth", subtitle="Comparing Texas and Bangalore") + theme_bw() + scale_colour_brewer(palette="Set1") + theme(legend.title = element_blank(), legend.position = 'bottom', title=element_text(face='bold', size=16), text=element_text(face='bold'), strip.text=element_text(hjust=0, face='bold')) + ylab("Effective number of first names")
+```
+
+## How quickly have names "evolved" in India and the US? 
+

@@ -1,0 +1,19 @@
+# Data files
+*.RData
+*.rda
+*.csv
+*.xlsx
+*.xls
+*.json
+*.dat
+*.sav
+*.dta
+*.zip
+
+# R
+.Rhistory
+.Rproj.user
+.RData
+
+# OS
+.DS_Store
